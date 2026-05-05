@@ -1,147 +1,145 @@
 import streamlit as st
-import pandas as pd
-from db import get_connection
+from db import authenticate, get_student_by_user, get_faculty_by_user
+from styles import inject_styles, FONTS
 
-st.set_page_config(page_title="AcadHub", layout="wide")
+st.set_page_config(
+    page_title="AcadHub",
+    page_icon="assets/logo.png" if False else None,
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-st.title("📘 AcadHub - Unified Academic System")
+inject_styles()
 
-# Tabs instead of sidebar
-tab1, tab2, tab3 = st.tabs(["🎓 Student Dashboard", "🧑‍🏫 Faculty Panel", "📂 PYQ Viewer"])
+# ── hide sidebar nav on login screen ──
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebarNav"] { display: none; }
+    section[data-testid="stSidebar"] { display: none; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-conn = get_connection()
-cursor = conn.cursor(dictionary=True)
+# ── session defaults ──
+for key, val in {
+    "logged_in": False,
+    "user_id": None,
+    "user_name": "",
+    "role": None,
+    "roll_no": None,
+    "faculty_id": None,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
-# -------------------------------
-# 🎓 STUDENT DASHBOARD
-# -------------------------------
-with tab1:
-    st.subheader("Student Dashboard")
+# ── redirect if already logged in ──
+if st.session_state.logged_in:
+    role = st.session_state.role
+    if role == "Student":
+        st.switch_page("pages/1_Student.py")
+    elif role == "Faculty":
+        st.switch_page("pages/2_Faculty.py")
+    elif role == "Admin":
+        st.switch_page("pages/3_Admin.py")
 
-    col1, col2 = st.columns(2)
-    roll = col1.number_input("Enter Roll Number", step=1)
 
-    if st.button("Fetch Data"):
-        # Student name
-        cursor.execute("""
-            SELECT u.name
-            FROM STUDENT s
-            JOIN USERS u ON s.user_id = u.user_id
-            WHERE s.roll_no = %s
-        """, (roll,))
-        student = cursor.fetchone()
+# ─────────────────────────────────────────────
+#  LOGIN PAGE
+# ─────────────────────────────────────────────
+col_l, col_c, col_r = st.columns([1, 1.1, 1])
 
-        if not student:
-            st.error("Student not found")
+with col_c:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+
+    # Logo
+    st.markdown(
+        """
+        <div style="text-align:center; margin-bottom:36px;">
+            <div style="
+                display:inline-flex; align-items:center; justify-content:center;
+                width:56px; height:56px; background:#6366F1; border-radius:14px;
+                margin-bottom:14px;
+            ">
+                <span style="font-family:'Clash Display',sans-serif; font-size:1.5rem;
+                             font-weight:700; color:#fff;">A</span>
+            </div>
+            <div style="font-family:'Clash Display',sans-serif; font-size:1.9rem;
+                        font-weight:700; color:#0F172A; letter-spacing:-0.03em;">
+                AcadHub
+            </div>
+            <div style="font-family:'Satoshi',sans-serif; font-size:0.9rem;
+                        color:#64748B; margin-top:4px;">
+                Academic Management System
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Card
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.markdown(
+        """
+        <p style="font-family:'Clash Display',sans-serif; font-size:1.25rem;
+                  font-weight:600; color:#0F172A; margin-bottom:4px;">
+            Sign in to your account
+        </p>
+        <p style="font-family:'Satoshi',sans-serif; font-size:0.875rem;
+                  color:#64748B; margin-bottom:20px;">
+            Enter your credentials to continue
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    username = st.text_input("Username", placeholder="Enter username")
+    password = st.text_input("Password", type="password", placeholder="Enter password")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    login_btn = st.button("Sign In", use_container_width=True)
+
+    if login_btn:
+        if not username or not password:
+            st.error("Please enter both username and password.")
         else:
-            st.success(f"Showing data for {student['name']}")
+            user = authenticate(username.strip(), password.strip())
+            if user:
+                st.session_state.logged_in = True
+                st.session_state.user_id   = user["user_id"]
+                st.session_state.user_name = user["name"]
+                st.session_state.role      = user["role"]
 
-            # Marks
-            cursor.execute("""
-                SELECT c.course_name, sp.marks_obtained, sp.grade
-                FROM STUDENT_PERFORMANCE sp
-                JOIN ASSESSMENT a ON sp.assessment_id = a.assessment_id
-                JOIN COURSE c ON a.course_code = c.course_code
-                WHERE sp.roll_no = %s
-            """, (roll,))
-            marks = cursor.fetchall()
+                if user["role"] == "Student":
+                    s = get_student_by_user(user["user_id"])
+                    st.session_state.roll_no = s["roll_no"] if s else None
 
-            st.markdown("### 📊 Marks")
-            st.dataframe(pd.DataFrame(marks))
+                elif user["role"] == "Faculty":
+                    f = get_faculty_by_user(user["user_id"])
+                    st.session_state.faculty_id = f["faculty_id"] if f else None
 
-            # Attendance
-            cursor.execute("""
-                SELECT course_code,
-                       ROUND(SUM(CASE WHEN status='Present' THEN 1 ELSE 0 END)*100.0/COUNT(*),2) AS attendance_pct
-                FROM ATTENDANCE
-                WHERE roll_no = %s
-                GROUP BY course_code
-            """, (roll,))
-            attendance = cursor.fetchall()
+                st.success(f"Welcome, {user['name']}!")
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
 
-            st.markdown("### 📅 Attendance")
-            st.dataframe(pd.DataFrame(attendance))
+    st.markdown("</div>", unsafe_allow_html=True)
 
-            # Total Marks (function demo)
-            cursor.execute("SELECT fn_total_marks(%s) AS total", (roll,))
-            total = cursor.fetchone()
-
-            st.info(f"Total Marks: {total['total']}")
-
-# -------------------------------
-# 🧑‍🏫 FACULTY PANEL
-# -------------------------------
-with tab2:
-    st.subheader("Update Student Marks")
-
-    col1, col2, col3 = st.columns(3)
-
-    roll = col1.number_input("Roll No", step=1)
-    assessment = col2.number_input("Assessment ID", step=1)
-    marks = col3.number_input("Marks", step=1)
-
-    if st.button("Update Marks"):
-        try:
-            cursor.callproc("proc_update_marks", (roll, assessment, marks))
-            conn.commit()
-            st.success("Marks updated successfully")
-        except Exception as e:
-            st.error(str(e))
-
-    st.markdown("---")
-
-    # 🔥 Topper section
-    st.markdown("### 🏆 Topper")
-
-    cursor.execute("""
-        SELECT u.name, s.roll_no, MAX(sp.marks_obtained) AS marks
-        FROM STUDENT_PERFORMANCE sp
-        JOIN STUDENT s ON sp.roll_no = s.roll_no
-        JOIN USERS u ON s.user_id = u.user_id
-    """)
-    topper = cursor.fetchone()
-
-    if topper:
-        st.success(f"{topper['name']} (Roll {topper['roll_no']}) - {topper['marks']} marks")
-
-# -------------------------------
-# 📂 PYQ VIEWER
-# -------------------------------
-with tab3:
-    st.subheader("Previous Year Questions")
-
-    course = st.text_input("Enter Course Code (e.g. CS101)")
-
-    if st.button("Load PYQs"):
-        cursor.execute("""
-            SELECT question, year, exam_type
-            FROM PYQ
-            WHERE course_code = %s
-        """, (course,))
-        pyqs = cursor.fetchall()
-
-        if pyqs:
-            st.dataframe(pd.DataFrame(pyqs))
-        else:
-            st.warning("No PYQs found")
-
-    st.markdown("---")
-
-    # 🔥 Low attendance alert (extra feature)
-    st.markdown("### ⚠️ Low Attendance (<75%)")
-
-    cursor.execute("""
-        SELECT s.roll_no, u.name,
-               ROUND(SUM(CASE WHEN a.status='Present' THEN 1 ELSE 0 END)*100.0/COUNT(*),2) AS pct
-        FROM ATTENDANCE a
-        JOIN STUDENT s ON a.roll_no = s.roll_no
-        JOIN USERS u ON s.user_id = u.user_id
-        GROUP BY s.roll_no, u.name
-        HAVING pct < 75
-    """)
-    low_att = cursor.fetchall()
-
-    if low_att:
-        st.dataframe(pd.DataFrame(low_att))
-    else:
-        st.success("All students above 75%")
+    # Demo credentials hint
+    with st.expander("Demo credentials"):
+        st.markdown(
+            """
+            <div style="font-family:'Satoshi',sans-serif; font-size:0.83rem; color:#475569;">
+            <b style="color:#6366F1;">Students</b><br>
+            kriti16 / kri16 &nbsp;|&nbsp; lavdeep23 / lav23 &nbsp;|&nbsp;
+            aman10 / ama10 &nbsp;|&nbsp; sim90 / ravi90<br><br>
+            <b style="color:#6366F1;">Faculty</b><br>
+            rumneek24 / rum24 &nbsp;|&nbsp; raj19 / pass12903<br><br>
+            <b style="color:#6366F1;">Admin</b><br>
+            doaa30 / adm@123
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
