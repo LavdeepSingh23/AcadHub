@@ -1,17 +1,93 @@
 use acadhub;
+/* ================================================================
+   SECTION 6 – TRIGGERS
+   ================================================================ */
+
+DROP TRIGGER IF EXISTS trg_student_performance_before_insert;
+CREATE TABLE IF NOT EXISTS performance_log (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    roll_no INT,
+    assessment_id INT,
+    action_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+DELIMITER $$
+
+SHOW TRIGGERS;
 DROP TRIGGER IF EXISTS trg_check_marks;
 DROP TRIGGER IF EXISTS trg_auto_grade;
 DROP TRIGGER IF EXISTS trg_student_performance_before_insert;
+DROP TRIGGER IF EXISTS trg_student_performance_after_insert;
+show triggers;
+DELIMITER $$
+show triggers;
 
-SHOW TRIGGERS LIKE 'STUDENT_PERFORMANCE';
+DROP TRIGGER IF EXISTS trg_sp_before_insert;
 
 DELIMITER $$
 
-CREATE TRIGGER trg_student_performance_before_insert
+CREATE TRIGGER trg_sp_before_insert
 BEFORE INSERT ON STUDENT_PERFORMANCE
 FOR EACH ROW
 BEGIN
-    DECLARE v_total INT DEFAULT 0;
+    DECLARE v_total INT;
+
+    -- fetch total marks
+    SELECT total_marks INTO v_total
+    FROM ASSESSMENT
+    WHERE assessment_id = NEW.assessment_id
+    LIMIT 1;
+
+    -- invalid assessment
+    IF v_total IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Invalid assessment_id';
+    END IF;
+
+    -- null handling
+    IF NEW.marks_obtained IS NULL THEN
+        SET NEW.marks_obtained = 0;
+    END IF;
+
+    -- validation
+    IF NEW.marks_obtained < 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Marks cannot be negative';
+    END IF;
+
+    IF NEW.marks_obtained > v_total THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Marks cannot exceed total marks';
+    END IF;
+
+    -- grading
+    SET NEW.grade = CASE
+        WHEN NEW.marks_obtained >= 90 THEN 'O'
+        WHEN NEW.marks_obtained >= 80 THEN 'A+'
+        WHEN NEW.marks_obtained >= 70 THEN 'A'
+        WHEN NEW.marks_obtained >= 60 THEN 'B+'
+        WHEN NEW.marks_obtained >= 50 THEN 'B'
+        WHEN NEW.marks_obtained >= 40 THEN 'C'
+        ELSE 'F'
+    END;
+
+    -- pass/fail
+    SET NEW.result = CASE
+        WHEN NEW.marks_obtained >= (v_total * 0.4) THEN 'Pass'
+        ELSE 'Fail'
+    END;
+
+END $$
+
+DELIMITER ;
+DROP TRIGGER IF EXISTS trg_sp_before_update;
+
+DELIMITER $$
+
+CREATE TRIGGER trg_sp_before_update
+BEFORE UPDATE ON STUDENT_PERFORMANCE
+FOR EACH ROW
+BEGIN
+    DECLARE v_total INT;
 
     SELECT total_marks INTO v_total
     FROM ASSESSMENT
@@ -23,16 +99,12 @@ BEGIN
         SET MESSAGE_TEXT = 'Invalid assessment_id';
     END IF;
 
-    IF NEW.marks_obtained < 0 THEN
+    IF NEW.marks_obtained < 0 OR NEW.marks_obtained > v_total THEN
         SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Marks cannot be negative';
+        SET MESSAGE_TEXT = 'Invalid marks';
     END IF;
 
-    IF NEW.marks_obtained > v_total THEN
-        SIGNAL SQLSTATE '45000'
-        SET MESSAGE_TEXT = 'Marks cannot exceed total marks';
-    END IF;
-
+    -- reassign grade
     SET NEW.grade = CASE
         WHEN NEW.marks_obtained >= 90 THEN 'O'
         WHEN NEW.marks_obtained >= 80 THEN 'A+'
@@ -43,6 +115,33 @@ BEGIN
         ELSE 'F'
     END;
 
+    -- reassign result
+    SET NEW.result = CASE
+        WHEN NEW.marks_obtained >= (v_total * 0.4) THEN 'Pass'
+        ELSE 'Fail'
+    END;
+
+END $$
+
+DELIMITER ;
+CREATE TABLE IF NOT EXISTS performance_log (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    roll_no INT,
+    assessment_id INT,
+    marks INT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+DROP TRIGGER IF EXISTS trg_sp_after_insert;
+
+DELIMITER $$
+
+CREATE TRIGGER trg_sp_after_insert
+AFTER INSERT ON STUDENT_PERFORMANCE
+FOR EACH ROW
+BEGIN
+    INSERT INTO performance_log (roll_no, assessment_id, marks)
+    VALUES (NEW.roll_no, NEW.assessment_id, NEW.marks_obtained);
 END $$
 
 DELIMITER ;
